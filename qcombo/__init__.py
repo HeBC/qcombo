@@ -26,10 +26,11 @@ __author__ = 'L.H.chen, Y.Li, Heiko Hergert, J.M.Yao'
 __version__ = '0.1.4'
 
 
-from sympy import IndexedBase,symbols
+from sympy import IndexedBase,symbols,preorder_traversal
+from sympy.tensor.indexed import Indexed
 from .wickcaculate import Wick 
 from . import canonical
-from .tools import SimplifyRule,Filter,uniteSimilarTerms,indicesMultToSimp
+from .tools import SimplifyRule,Filter,uniteSimilarTerms,indicesMultToSimp,get_all_indices
 from . import output
 from .simplify import sort_add_expression,reorder_dummy_indices_add,filterLambdaBody,uniteSameGAndH
 
@@ -195,9 +196,66 @@ def simplifyUseBoth(expr):
     reordered_expr = reorder_dummy_indices_add(sorted_expr)
     return sort_add_expression(reordered_expr)
 
+
+def _normalize_operator_indices(operator_indices, body, operator_name):
+    """
+    Normalize custom operator indices to [[up...], [down...]] format.
+    """
+    if operator_indices is None:
+        return None
+    if not isinstance(operator_indices, list) or len(operator_indices) != 2:
+        raise ValueError(f"{operator_name} indices must be a list with two lists: [[up...], [down...]]")
+    if len(operator_indices[0]) != body or len(operator_indices[1]) != body:
+        raise ValueError(
+            f"{operator_name} indices do not match {body}-body operator. "
+            f"Expected {body} upper and {body} lower indices."
+        )
+    return operator_indices
+
+
+def _rename_intermediate_indices(expr, intermediate_indices=None, intermediate_prefix='x'):
+    """
+    Rename dummy (summation) indices in expression.
+    """
+    A_tensor = None
+    for term in preorder_traversal(expr):
+        if isinstance(term, Indexed) and term.base == A:
+            A_tensor = term
+
+    external_indices = set()
+    if A_tensor is not None:
+        external_indices.update(A_tensor.indices[0])
+        external_indices.update(A_tensor.indices[1])
+
+    dummy_indices = [i for i in get_all_indices(expr) if i not in external_indices]
+    if not dummy_indices:
+        return expr
+
+    if intermediate_indices is not None:
+        if len(intermediate_indices) < len(dummy_indices):
+            raise ValueError(
+                f"Not enough intermediate index names: need {len(dummy_indices)}, got {len(intermediate_indices)}"
+            )
+        renamed_symbols = [symbols(str(i)) for i in intermediate_indices[:len(dummy_indices)]]
+    else:
+        renamed_symbols = [symbols(f"{intermediate_prefix}{i}") for i in range(len(dummy_indices))]
+
+    replace_map = dict(zip(dummy_indices, renamed_symbols))
+    return expr.xreplace(replace_map)
+
 #####################################################################
 #
-def easyCombo(left, right, contraction=None, latexOutput=None, amcOutput=None):
+def easyCombo(
+    left,
+    right,
+    contraction=None,
+    latexOutput=None,
+    amcOutput=None,
+    left_indices=None,
+    right_indices=None,
+    intermediate_indices=None,
+    intermediate_prefix='x'
+):
     '''
     Calculate the commutator [left, right] to specified contraction, e.g., easyCombo(2, 2)
 
@@ -207,6 +265,10 @@ def easyCombo(left, right, contraction=None, latexOutput=None, amcOutput=None):
     contraction: int or int list, the body of commutator to obtain e.g., 0 or [0,1,...]
     latexOutput: the file name of the output tex file
     amcOutput: the file name of the amc input file
+    left_indices: custom indices for left operator when left is int, e.g. [['i','j'],['a','b']]
+    right_indices: custom indices for right operator when right is int, e.g. [['k','l'],['c','d']]
+    intermediate_indices: custom summation index names (list), e.g. ['p','q','r',...]
+    intermediate_prefix: used when intermediate_indices is None, e.g. x0,x1,x2...
 
     ## Warning
     Ensure contraction terms are valid,
@@ -219,12 +281,14 @@ def easyCombo(left, right, contraction=None, latexOutput=None, amcOutput=None):
     
     # Check if input indices are string lists; if not, automatically assign from predefined list
     if isinstance(left, list) and isinstance(right, list):
-        left_indices = left
-        right_indices = right
-        max_contraction_body = len(left_indices[0]) + len(right_indices[0])
+        left_op_indices = left
+        right_op_indices = right
+        max_contraction_body = len(left_op_indices[0]) + len(right_op_indices[0])
     elif isinstance(left, int) and isinstance(right, int):
-        left_indices = [indiceListPre[:left], indiceListPre[left:left*2]]
-        right_indices = [indiceListPre[left*2:left*2+right], indiceListPre[left*2+right:left*2+right*2]] 
+        normalized_left = _normalize_operator_indices(left_indices, left, 'Left operator')
+        normalized_right = _normalize_operator_indices(right_indices, right, 'Right operator')
+        left_op_indices = normalized_left if normalized_left is not None else [indiceListPre[:left], indiceListPre[left:left*2]]
+        right_op_indices = normalized_right if normalized_right is not None else [indiceListPre[left*2:left*2+right], indiceListPre[left*2+right:left*2+right*2]]
         max_contraction_body = left + right 
     else:
         raise ValueError("Input must be both integers or both string lists")
@@ -244,7 +308,7 @@ def easyCombo(left, right, contraction=None, latexOutput=None, amcOutput=None):
         
     #######################################################################
     # Computation section
-    commutator = bodys(left_indices, right_indices)
+    commutator = bodys(left_op_indices, right_op_indices)
 
     # Calculate commutator
     commutator.commutate()
@@ -279,6 +343,11 @@ def easyCombo(left, right, contraction=None, latexOutput=None, amcOutput=None):
                 left_Base = IndexedBase('G')  # New left operator base
                 right_Base = IndexedBase('H')  # New right operator base
                 united_expr = united_expr.xreplace({G: left_Base, H: right_Base})
+                united_expr = _rename_intermediate_indices(
+                    united_expr,
+                    intermediate_indices=intermediate_indices,
+                    intermediate_prefix=intermediate_prefix
+                )
                 # Store in dictionary with key like '2B_lambda2B'
                 expr_dict[f'{filter_body}B_lambda{lambda_body}B'] = united_expr
                 if max_lambda_body < lambda_body:
@@ -288,8 +357,8 @@ def easyCombo(left, right, contraction=None, latexOutput=None, amcOutput=None):
     print("Calculation completed!")
 
     # Define left, right, and contraction operator bases
-    left_body = len(left_indices[0])
-    right_body = len(right_indices[0])
+    left_body = len(left_op_indices[0])
+    right_body = len(right_op_indices[0])
     left_Base_str = f'{left_Base}'
     right_Base_str = f'{right_Base}'
     contraction_Base_str = 'R'
