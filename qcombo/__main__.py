@@ -148,6 +148,27 @@ Notes:
         "--amc-output", '-ao',
         help="AMC program input file output name. Default: auto-generated based on operators"
     )
+
+    parser.add_argument(
+        "--left-indices",
+        help="Custom indices for left operator when LEFT is integer, format: \"[['i','j'],['a','b']]\""
+    )
+
+    parser.add_argument(
+        "--right-indices",
+        help="Custom indices for right operator when RIGHT is integer, format: \"[['k','l'],['c','d']]\""
+    )
+
+    parser.add_argument(
+        "--intermediate-indices",
+        help="Custom intermediate (summation) index names, format: \"['p','q','r']\""
+    )
+
+    parser.add_argument(
+        "--intermediate-prefix",
+        default="x",
+        help="Prefix for auto-generated intermediate indices (default: x, producing x0,x1,...)"
+    )
     
     parser.add_argument(
         "-v", "--version",
@@ -217,6 +238,14 @@ Notes:
         contraction = parse_contraction_argument(args.contraction)
     except ValueError as e:
         parser.error(f"Invalid contraction argument: {e}")
+
+    # Parse custom index options
+    try:
+        left_indices = ast.literal_eval(args.left_indices) if args.left_indices else None
+        right_indices = ast.literal_eval(args.right_indices) if args.right_indices else None
+        intermediate_indices = ast.literal_eval(args.intermediate_indices) if args.intermediate_indices else None
+    except Exception as e:
+        parser.error(f"Invalid custom index format: {e}")
     
     # Print start information
     if not args.quiet:
@@ -235,7 +264,11 @@ Notes:
             right=right,
             contraction=contraction,
             latexOutput=args.latex_output,
-            amcOutput=args.amc_output
+            amcOutput=args.amc_output,
+            left_indices=left_indices,
+            right_indices=right_indices,
+            intermediate_indices=intermediate_indices,
+            intermediate_prefix=args.intermediate_prefix
         )
         
         return 0
@@ -294,6 +327,16 @@ def interactive_mode():
             if amc_file == '':
                 amc_file = None
 
+            intermediate_input = input("Intermediate index names (list, optional, e.g. ['p','q']): ").strip()
+            if intermediate_input == '':
+                intermediate_indices = None
+            else:
+                intermediate_indices = ast.literal_eval(intermediate_input)
+
+            intermediate_prefix = input("Intermediate index prefix (default x): ").strip()
+            if intermediate_prefix == '':
+                intermediate_prefix = 'x'
+
             # Execute calculation
             print(f"\nComputing commutator: {left} with {right}")
             if contraction is None:
@@ -308,7 +351,9 @@ def interactive_mode():
                 right=right,
                 contraction=contraction,
                 latexOutput=latex_file,
-                amcOutput=amc_file
+                amcOutput=amc_file,
+                intermediate_indices=intermediate_indices,
+                intermediate_prefix=intermediate_prefix
             )
                 
             
